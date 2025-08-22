@@ -1,4 +1,4 @@
-# 文件名: oil_prices_app_mobile.py
+# 文件名: oil_prices_app_mobile_v3.py
 import requests
 import pandas as pd
 import streamlit as st
@@ -16,12 +16,14 @@ SERIES = {
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
+
 # ========== 实时期货价格（新浪财经） ==========
 def _safe_float(s):
     try:
         return float(s)
     except Exception:
         return None
+
 
 @st.cache_data(ttl=60)
 def fetch_realtime_prices():
@@ -54,6 +56,7 @@ def fetch_realtime_prices():
         out[name] = {"price": price, "time": ts}
     return out
 
+
 # ========== 历史现货（EIA） ==========
 @st.cache_data(ttl=3600)
 def fetch_eia_data_v2(series_id, api_key, start=None, end=None):
@@ -65,11 +68,12 @@ def fetch_eia_data_v2(series_id, api_key, start=None, end=None):
     data = resp.json()
     if "response" in data and "data" in data["response"]:
         records = data["response"]["data"]
-        df = pd.DataFrame(records)[["period", "value"]].rename(columns={"period":"日期","value":"价格"})
+        df = pd.DataFrame(records)[["period", "value"]].rename(columns={"period": "日期", "value": "价格"})
         df["日期"] = pd.to_datetime(df["日期"])
         return df.sort_values("日期")
     else:
-        return pd.DataFrame(columns=["日期","价格"])
+        return pd.DataFrame(columns=["日期", "价格"])
+
 
 def load_or_update_data(series_id, name):
     csv_path = os.path.join(DATA_DIR, f"{name}.csv")
@@ -77,7 +81,7 @@ def load_or_update_data(series_id, name):
         df_local = pd.read_csv(csv_path, parse_dates=["日期"])
         last_date = df_local["日期"].max().strftime("%Y-%m-%d")
     else:
-        df_local = pd.DataFrame(columns=["日期","价格"])
+        df_local = pd.DataFrame(columns=["日期", "价格"])
         last_date = None
     df_new = fetch_eia_data_v2(series_id, API_KEY, start=last_date)
     if df_new is not None and not df_new.empty:
@@ -87,34 +91,51 @@ def load_or_update_data(series_id, name):
     else:
         return df_local
 
+
 def aggregate_data(df, freq):
     if df.empty: return df.copy()
-    if freq=="日":
+    if freq == "日":
         df_show = df.copy()
         df_show["日期"] = df_show["日期"].dt.strftime("%Y-%m-%d")
-    elif freq=="月":
+    elif freq == "月":
         df_show = df.resample("M", on="日期").mean().reset_index()
         df_show["日期"] = df_show["日期"].dt.strftime("%Y-%m")
-    elif freq=="年":
+    elif freq == "年":
         df_show = df.resample("Y", on="日期").mean().reset_index()
         df_show["日期"] = df_show["日期"].dt.strftime("%Y")
     else:
         df_show = df.copy()
     return df_show
 
+
 def show_df_centered(display_df):
-    st.dataframe(display_df, use_container_width=True, height=400)
+    # 自动缩放字体，较大字体
+    html = display_df.to_html(index=False)
+    st.markdown(
+        f"""
+        <div style='overflow-x:auto;'>
+            <style>
+                table {{font-size:5vw; border-collapse: collapse; width: 100%;}}
+                th, td {{padding: 8px 12px; text-align: center; border: 1px solid #ddd;}}
+                th {{background-color:#f2f2f2;}}
+            </style>
+            {html}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
 
 # ========== Streamlit 页面 ==========
-st.set_page_config(page_title="原油价格：实时 & 历史", layout="centered")
-st.title("📊 国际原油价格（手机优化版）")
+st.set_page_config(page_title="原油价格：实时期货 & 现货历史", layout="centered")
+st.title("📊 国际原油：期货实时 & 现货历史价格面板")
 
 # —— 期货实时价格 ——
 st.subheader("⏱ 期货实时价格")
 rt = fetch_realtime_prices()
 now_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-for name, color in zip(["布伦特原油期货", "WTI原油期货"], ["#FFC107","#F44336"]):
+for name, color in zip(["布伦特原油期货", "WTI原油期货"], ["#FFC107", "#F44336"]):
     price = rt.get(name, {}).get("price")
     ts = rt.get(name, {}).get("time") or now_ts
     st.markdown(
@@ -123,7 +144,7 @@ for name, color in zip(["布伦特原油期货", "WTI原油期货"], ["#FFC107",
             <h2 style='color:white;font-size:5vw;margin:5px 0;'>⛽ {name}</h2>
             <p style='color:white;font-size:6vw;font-weight:bold;margin:5px 0;'>{('--' if price is None else f'{price:.2f}')} 美元/桶</p>
             <p style='color:white;font-size:3.5vw;margin:2px 0;'>更新时间 {ts}</p>
-            <p style='color:white;font-size:3vw;opacity:.85;margin:2px 0;'>延迟报价，仅供参考</p>
+            <p style='color:white;font-size:3vw;opacity:.85;margin:2px 0;'>说明：期货价格为盘中变动，为延迟报价</p>
         </div>
         """, unsafe_allow_html=True
     )
@@ -131,7 +152,7 @@ for name, color in zip(["布伦特原油期货", "WTI原油期货"], ["#FFC107",
 st.markdown("---")
 
 # —— 现货最新结算价 ——
-st.subheader("🆕 现货最新结算价（EIA 日度）")
+st.subheader("🆕 现货最新结算价")
 raw_dfs = {}
 spot_latest = {}
 for name, sid in SERIES.items():
@@ -141,7 +162,7 @@ for name, sid in SERIES.items():
         last_row = df_raw.sort_values("日期").iloc[-1]
         spot_latest[name] = {"date": last_row["日期"].strftime("%Y-%m-%d"), "price": float(last_row["价格"])}
 
-for name, color in zip(["布伦特原油","WTI原油"], ["#FFC107","#F44336"]):
+for name, color in zip(["布伦特原油", "WTI原油"], ["#FFC107", "#F44336"]):
     d = spot_latest.get(name)
     st.markdown(
         f"""
@@ -149,7 +170,7 @@ for name, color in zip(["布伦特原油","WTI原油"], ["#FFC107","#F44336"]):
             <h2 style='color:white;font-size:5vw;margin:5px 0;'>🛢 {name}（现货）</h2>
             <p style='color:white;font-size:6vw;font-weight:bold;margin:5px 0;'>{('--' if d is None else f'{d["price"]:.2f}')} 美元/桶</p>
             <p style='color:white;font-size:3.5vw;margin:2px 0;'>结算日期 {('--' if d is None else d["date"])}</p>
-            <p style='color:white;font-size:3vw;opacity:.85;margin:2px 0;'>EIA 日度结算价</p>
+            <p style='color:white;font-size:3vw;opacity:.85;margin:2px 0;'>EIA 日度统计价，反映交易日结算价（非盘中）</p>
         </div>
         """, unsafe_allow_html=True
     )
@@ -157,9 +178,9 @@ for name, color in zip(["布伦特原油","WTI原油"], ["#FFC107","#F44336"]):
 st.markdown("---")
 
 # —— 历史价格图表 + 表格 ——
-st.subheader("📈 历史原油价格走势")
-years = st.select_slider("年份范围", options=list(range(2000,2026)), value=(2015,2025))
-freq = st.selectbox("数据展示频率", ["日","月","年"])
+st.subheader("📈 历史原油价格走势（EIA 数据）")
+years = st.select_slider("选择展示的年份范围", options=list(range(2000, 2026)), value=(2015, 2025))
+freq = st.selectbox("选择数据展示频率", ["日", "月", "年"])
 
 dfs = {}
 for name, df_raw in raw_dfs.items():
@@ -170,27 +191,27 @@ for name, df_raw in raw_dfs.items():
 
 if "布伦特原油" in dfs and "WTI原油" in dfs and not dfs["布伦特原油"].empty and not dfs["WTI原油"].empty:
     merged = dfs["布伦特原油"].merge(
-        dfs["WTI原油"], on="日期", how="outer", suffixes=("_布伦特","_WTI")
-    ).sort_values("日期").rename(columns={"价格_布伦特":"布伦特价格","价格_WTI":"WTI价格"})
+        dfs["WTI原油"], on="日期", how="outer", suffixes=("_布伦特", "_WTI")
+    ).sort_values("日期").rename(columns={"价格_布伦特": "布伦特价格", "价格_WTI": "WTI价格"})
 
     # 折线图
     fig = px.line(
-        merged, x="日期", y=["布伦特价格","WTI价格"],
-        labels={"value":"价格 (美元/桶)","日期":"日期"},
+        merged, x="日期", y=["布伦特价格", "WTI价格"],
+        labels={"value": "价格 (美元/桶)", "日期": "日期"},
         title="布伦特 vs WTI 历史价格趋势"
     )
     fig.update_layout(
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=10,r=10,t=40,b=10)
+        margin=dict(l=10, r=10, t=40, b=10)
     )
     st.plotly_chart(fig, use_container_width=True, config={'responsive': True})
 
     # 表格
     st.subheader("📋 国际原油历史价格表")
-    display_df = merged[["日期","布伦特价格","WTI价格"]].sort_values("日期", ascending=False).reset_index(drop=True)
-    show_df_centered(display_df)
 
-    # Excel 下载
+    display_df = merged[["日期", "布伦特价格", "WTI价格"]].sort_values("日期", ascending=False).reset_index(drop=True)
+
+    # 下载按钮移动到表格标题下方
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         display_df.to_excel(writer, index=False, sheet_name="原油价格")
@@ -200,5 +221,8 @@ if "布伦特原油" in dfs and "WTI原油" in dfs and not dfs["布伦特原油"
         file_name="原油价格.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+    show_df_centered(display_df)
+
 else:
     st.warning("未能成功获取历史数据，请检查 API Key 或网络连接。")
