@@ -108,9 +108,27 @@ def aggregate_data(df, freq):
     return df_show
 
 
-def show_df_centered(display_df):
-    # 自动缩放字体，较大字体
-    html = display_df.to_html(index=False)
+def show_df_centered(display_df, page_size=15):
+    """分页显示表格"""
+    total_rows = len(display_df)
+    total_pages = (total_rows - 1) // page_size + 1
+
+    if "page_num" not in st.session_state:
+        st.session_state.page_num = 1
+
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col1:
+        if st.button("⬅️ 上一页") and st.session_state.page_num > 1:
+            st.session_state.page_num -= 1
+    with col3:
+        if st.button("下一页 ➡️") and st.session_state.page_num < total_pages:
+            st.session_state.page_num += 1
+
+    start = (st.session_state.page_num - 1) * page_size
+    end = start + page_size
+    page_df = display_df.iloc[start:end]
+
+    html = page_df.to_html(index=False)
     st.markdown(
         f"""
         <div style='overflow-x:auto;'>
@@ -121,6 +139,7 @@ def show_df_centered(display_df):
             </style>
             {html}
         </div>
+        <p style='text-align:center;'>第 {st.session_state.page_num} / {total_pages} 页</p>
         """,
         unsafe_allow_html=True
     )
@@ -167,7 +186,7 @@ for name, color in zip(["布伦特原油", "WTI原油"], ["#FFC107", "#F44336"])
     st.markdown(
         f"""
         <div style='background-color:{color};padding:15px;border-radius:15px;margin-bottom:12px;text-align:center;'>
-            <h2 style='color:white;font-size:5vw;margin:5px 0;'>🛢 {name}（现货）</h2>
+            <h2 style='color:white;font-size:5vw;margin:5px 0;'>🛢 {name}</h2>
             <p style='color:white;font-size:6vw;font-weight:bold;margin:5px 0;'>{('--' if d is None else f'{d["price"]:.2f}')} 美元/桶</p>
             <p style='color:white;font-size:3.5vw;margin:2px 0;'>结算日期 {('--' if d is None else d["date"])}</p>
             <p style='color:white;font-size:3vw;opacity:.85;margin:2px 0;'>EIA 日度统计价，反映交易日结算价（非盘中）</p>
@@ -180,25 +199,44 @@ st.markdown("---")
 # —— 历史价格图表 + 表格 ——
 st.subheader("📈 历史原油价格走势（EIA 数据）")
 years = st.select_slider("选择展示的年份范围", options=list(range(2000, 2026)), value=(2015, 2025))
-freq = st.selectbox("选择数据展示频率", ["日", "月", "年"])
 
 dfs = {}
 for name, df_raw in raw_dfs.items():
     if not df_raw.empty:
         df = df_raw[(df_raw["日期"].dt.year >= years[0]) & (df_raw["日期"].dt.year <= years[1])]
-        df = aggregate_data(df, freq)
         dfs[name] = df
 
 if "布伦特原油" in dfs and "WTI原油" in dfs and not dfs["布伦特原油"].empty and not dfs["WTI原油"].empty:
-    merged = dfs["布伦特原油"].merge(
-        dfs["WTI原油"], on="日期", how="outer", suffixes=("_布伦特", "_WTI")
+    # 默认频率
+    if "freq" not in st.session_state:
+        st.session_state.freq = "月"
+
+    st.subheader("📋 国际原油历史价格表")
+    # 改成点击按钮选择频率
+    cols = st.columns(3)
+    with cols[0]:
+        if st.button("日度数据"):
+            st.session_state.freq = "日"
+    with cols[1]:
+        if st.button("月度数据"):
+            st.session_state.freq = "月"
+    with cols[2]:
+        if st.button("年度数据"):
+            st.session_state.freq = "年"
+
+    dfs_freq = {}
+    for name, df_raw in dfs.items():
+        dfs_freq[name] = aggregate_data(df_raw, st.session_state.freq)
+
+    merged = dfs_freq["布伦特原油"].merge(
+        dfs_freq["WTI原油"], on="日期", how="outer", suffixes=("_布伦特", "_WTI")
     ).sort_values("日期").rename(columns={"价格_布伦特": "布伦特价格", "价格_WTI": "WTI价格"})
 
     # 折线图
     fig = px.line(
         merged, x="日期", y=["布伦特价格", "WTI价格"],
         labels={"value": "价格 (美元/桶)", "日期": "日期"},
-        title="布伦特 vs WTI 历史价格趋势"
+        title=f"布伦特 vs WTI 历史价格趋势（{st.session_state.freq}）"
     )
     fig.update_layout(
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -206,12 +244,8 @@ if "布伦特原油" in dfs and "WTI原油" in dfs and not dfs["布伦特原油"
     )
     st.plotly_chart(fig, use_container_width=True, config={'responsive': True})
 
-    # 表格
-    st.subheader("📋 国际原油历史价格表")
-
+    # 下载按钮在表格标题下方
     display_df = merged[["日期", "布伦特价格", "WTI价格"]].sort_values("日期", ascending=False).reset_index(drop=True)
-
-    # 下载按钮移动到表格标题下方
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         display_df.to_excel(writer, index=False, sheet_name="原油价格")
@@ -222,7 +256,8 @@ if "布伦特原油" in dfs and "WTI原油" in dfs and not dfs["布伦特原油"
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    show_df_centered(display_df)
+    # 翻页表格
+    show_df_centered(display_df, page_size=15)
 
 else:
     st.warning("未能成功获取历史数据，请检查 API Key 或网络连接。")
