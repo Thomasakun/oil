@@ -1,4 +1,11 @@
 # 文件名: oil_prices_app_mobile_v3.py
+"""
+移动端友好版：原油价格面板
+- 折线图固定放在 "历史原油价格走势（EIA 数据）" 标题下方
+- 频率选择使用横向 radio（手机端也为横向布局）
+- 表格分页使用滑块选择页码（水平滑块，手机端体验好），并保留上一页 / 下一页按钮
+- 下载按钮在表格标题下方
+"""
 import requests
 import pandas as pd
 import streamlit as st
@@ -93,8 +100,8 @@ def load_or_update_data(series_id, name):
 
 def aggregate_data(df, freq):
     """返回按 freq 聚合后的 DataFrame，'日期' 为 datetime，'价格' 为数值"""
-    if df.empty:
-        return df.copy()
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["日期", "价格"])
     df = df.copy()
     if freq == "日":
         return df.sort_values("日期").reset_index(drop=True)
@@ -108,77 +115,87 @@ def aggregate_data(df, freq):
         return df.sort_values("日期").reset_index(drop=True)
 
 
-# ========== UI 辅助：分页显示表格（美化样式） ==========
+# ========== UI 辅助：CSS 和 分页表格 ==========
 def _inject_css():
     st.markdown(
         """
         <style>
-        /* 按钮美化（影响页面上的所有按钮） */
-        .stButton>button {
-            border-radius: 12px;
-            padding: 8px 14px;
+        /* 全局按钮圆角与阴影 */
+        .stButton>button, div[data-testid="stDownloadButton"] button {
+            border-radius: 10px;
+            padding: 8px 12px;
             font-weight: 600;
-            box-shadow: 0 3px 10px rgba(0,0,0,0.12);
-            transition: transform .06s ease, box-shadow .06s ease;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
             border: none;
         }
-        .stButton>button:active { transform: translateY(1px); }
-        /* 下载按钮更突出 */
-        div[data-testid="stDownloadButton"] button {
-            border-radius: 12px;
-            padding: 8px 14px;
-            font-weight:700;
-        }
-        /* 表格样式 */
-        .big-table table {font-size:4.2vw; border-collapse: collapse; width:100%;}
+        /* 美化下载按钮更醒目 */
+        div[data-testid="stDownloadButton"] button { font-weight:700; }
+        /* 表格样式（适配手机大字体） */
+        .big-table table { font-size:4.4vw; width:100%; border-collapse:collapse; }
         .big-table th, .big-table td { padding:8px 10px; text-align:center; border:1px solid #eee; }
-        .big-table th { background:#f7f7f7;}
-        /* 居中页码 */
-        .page-info { text-align:center; font-size:0.95rem; margin:6px 0 8px 0; color:#333; }
-        /* 小屏布局微调 */
-        @media (min-width: 600px){
-            .stButton>button { font-size:0.95rem; padding:10px 16px; }
-            .big-table table { font-size:14px; }
-        }
+        .big-table th { background:#fafafa; font-weight:700; }
+        /* 页码信息 */
+        .page-info { text-align:center; margin:6px 0 8px 0; font-size:0.95rem; color:#333; }
+        /* 保证 radio 横向在窄屏也显示为横向（st.radio horizontal=True 已有，但这里做补强） */
+        .stRadio > div[role="radiogroup"] { display:flex; flex-wrap:nowrap; gap:6px; }
+        /* 防止列在超窄屏下折叠得太难看，允许横向滚动 */
+        .horizontal-scroll { overflow-x:auto; white-space:nowrap; }
         </style>
         """,
-        unsafe_allow_html=True,
+        unsafe_allow_html=True
     )
 
 
-def show_df_centered(display_df, page_size=15):
-    """display_df: pandas.DataFrame，'日期' 为 datetime 类型。
-       在函数内部会把 '日期' 格式化为字符串用于显示（按传入的 date_format）"""
+def show_df_centered(display_df, page_size=15, slider_key="page_slider"):
+    """
+    display_df: pandas.DataFrame (日期 字段应已为字符串或可显示)
+    page_size: 每页行数
+    slider_key: 用于 slider 的 session_state key（支持多个表时传不同 key）
+    """
     total_rows = len(display_df)
-    if "page_num" not in st.session_state:
-        st.session_state.page_num = 1
+    if total_rows == 0:
+        st.info("当前没有可显示的数据。")
+        return
 
     total_pages = max(1, (total_rows - 1) // page_size + 1)
 
-    # 保证 page_num 在合理范围
-    if st.session_state.page_num > total_pages:
-        st.session_state.page_num = total_pages
+    # 初始化 page_num
+    if "page_num" not in st.session_state:
+        st.session_state.page_num = 1
     if st.session_state.page_num < 1:
         st.session_state.page_num = 1
+    if st.session_state.page_num > total_pages:
+        st.session_state.page_num = total_pages
 
-    # 横向按钮：上一页、页码、下一页
-    c1, c2, c3 = st.columns([1, 1.4, 1])
+    # 页码滑块（水平控件，移动端友好）
+    # 使用独立 slider_key 保证多表或多处使用不会冲突
+    st.markdown("<div class='horizontal-scroll'>", unsafe_allow_html=True)
+    new_page = st.slider("跳转页码", min_value=1, max_value=total_pages, value=st.session_state.page_num, key=slider_key)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # 如果滑块改变，则更新 page_num
+    st.session_state.page_num = int(new_page)
+
+    # 同一行显示 上一页 / 页码信息 / 下一页（若空间不足会换行，但滑块保证了横向交互）
+    c1, c2, c3 = st.columns([1, 2, 1])
     with c1:
         if st.button("⬅️ 上一页"):
             if st.session_state.page_num > 1:
                 st.session_state.page_num -= 1
+                st.session_state[slider_key] = st.session_state.page_num
     with c2:
         st.markdown(f"<div class='page-info'>第 {st.session_state.page_num} / {total_pages} 页 — 共 {total_rows} 行</div>", unsafe_allow_html=True)
     with c3:
         if st.button("下一页 ➡️"):
             if st.session_state.page_num < total_pages:
                 st.session_state.page_num += 1
+                st.session_state[slider_key] = st.session_state.page_num
 
+    # 计算当前页的数据并显示
     start = (st.session_state.page_num - 1) * page_size
     end = start + page_size
     page_df = display_df.iloc[start:end].reset_index(drop=True)
 
-    # 输出 HTML 表格（带 class 方便 CSS）
     html = page_df.to_html(index=False)
     st.markdown(f"<div class='big-table'>{html}</div>", unsafe_allow_html=True)
 
@@ -220,7 +237,7 @@ for name, sid in SERIES.items():
         last_row = df_raw.sort_values("日期").iloc[-1]
         spot_latest[name] = {"date": last_row["日期"].strftime("%Y-%m-%d"), "price": float(last_row["价格"])}
 
-for name, color in zip(["布伦特原油现货", "WTI原油现货"], ["#FFC107", "#F44336"]):
+for name, color in zip(["布伦特原油", "WTI原油"], ["#FFC107", "#F44336"]):
     d = spot_latest.get(name)
     st.markdown(
         f"""
@@ -234,33 +251,31 @@ for name, color in zip(["布伦特原油现货", "WTI原油现货"], ["#FFC107",
 
 st.markdown("---")
 
-# —— 历史价格（图表在此标题下方） ——
+# —— 历史价格（折线图固定在此标题下方） ——
 st.subheader("📈 历史原油价格走势（EIA 数据）")
 
 # 年份范围选择（放在图表上方）
 years = st.select_slider("选择展示的年份范围", options=list(range(2000, 2026)), value=(2015, 2025))
 
-# 如果没有 freq 初始值，默认月频
+# 保证 freq 有初始值
 if "freq" not in st.session_state:
     st.session_state.freq = "月"
 
-# 准备按年份过滤的原始数据
+# 过滤按年份
 dfs = {}
 for name, df_raw in raw_dfs.items():
     if not df_raw.empty:
         df = df_raw[(df_raw["日期"].dt.year >= years[0]) & (df_raw["日期"].dt.year <= years[1])]
         dfs[name] = df
 
-# 只有当两组数据都存在时显示图与表
+# 仅当两组数据都有时显示图与表
 if "布伦特原油" in dfs and "WTI原油" in dfs and not dfs["布伦特原油"].empty and not dfs["WTI原油"].empty:
-    # 按当前频率聚合（用于图表）
-    df_b = aggregate_data(dfs["布伦特原油"], st.session_state.freq).rename(columns={"价格": "布伦特价格"})
-    df_w = aggregate_data(dfs["WTI原油"], st.session_state.freq).rename(columns={"价格": "WTI价格"})
+    # 先聚合为当前 freq，用于图表（保持时间列为 datetime）
+    df_b_plot = aggregate_data(dfs["布伦特原油"], st.session_state.freq).rename(columns={"价格": "布伦特价格"})
+    df_w_plot = aggregate_data(dfs["WTI原油"], st.session_state.freq).rename(columns={"价格": "WTI价格"})
+    merged_for_plot = pd.merge(df_b_plot, df_w_plot, on="日期", how="outer").sort_values("日期").reset_index(drop=True)
 
-    merged_for_plot = pd.merge(df_b, df_w, on="日期", how="outer").sort_values("日期").reset_index(drop=True)
-
-    # 折线图（放在 "历史原油价格走势（EIA 数据）" 标题下方）
-    # 为保证 x 轴为时间类型，直接使用 '日期'（datetime）
+    # 折线图 — 直接放在 "历史原油价格走势（EIA 数据）" 标题下方
     fig = px.line(
         merged_for_plot,
         x="日期",
@@ -276,43 +291,42 @@ if "布伦特原油" in dfs and "WTI原油" in dfs and not dfs["布伦特原油"
 
     st.markdown("---")
 
-    # —— 国际原油历史价格表（频率选择按钮放此标题下方） ——
+    # —— 国际原油历史价格表（频率选择放在此标题下方） ——
     st.subheader("📋 国际原油历史价格表")
 
-    # 频率选择按钮（横向排列，美观）
-    btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 1])
-    with btn_col1:
-        if st.button("🗓 日度数据"):
-            st.session_state.freq = "日"
-            st.session_state.page_num = 1
-    with btn_col2:
-        if st.button("📅 月度数据"):
-            st.session_state.freq = "月"
-            st.session_state.page_num = 1
-    with btn_col3:
-        if st.button("🧾 年度数据"):
-            st.session_state.freq = "年"
-            st.session_state.page_num = 1
+    # 横向频率选择（使用 st.radio horizontal=True，移动端会横向显示）
+    freq = st.radio(
+        "选择数据频率",
+        options=["日", "月", "年"],
+        index={"日": 0, "月": 1, "年": 2}.get(st.session_state.freq, 1),
+        horizontal=True,
+        key="freq_radio"
+    )
+    # 将 radio 的选择写回 session_state.freq（保持兼容）
+    st.session_state.freq = freq
+    # 每次切换频率回到第1页
+    st.session_state.page_num = 1
+    # 页面每页行数（可改成下拉）
+    PAGE_SIZE = 15
 
-    # 重新聚合以确保表格与图表使用相同的 freq（用户可能刚刚点了按钮）
+    # 重新为表格聚合（基于最新 freq）
     df_b = aggregate_data(dfs["布伦特原油"], st.session_state.freq).rename(columns={"价格": "布伦特价格"})
     df_w = aggregate_data(dfs["WTI原油"], st.session_state.freq).rename(columns={"价格": "WTI价格"})
     merged = pd.merge(df_b, df_w, on="日期", how="outer").sort_values("日期", ascending=False).reset_index(drop=True)
 
-    # 准备供展示的 DataFrame（把日期格式化为字符串以便表格显示）
+    # 为显示格式化日期（用于表格 HTML）
     display_df = merged[["日期", "布伦特价格", "WTI价格"]].copy()
-    if st.session_state.freq == "日":
-        display_df["日期"] = display_df["日期"].dt.strftime("%Y-%m-%d")
-    elif st.session_state.freq == "月":
-        display_df["日期"] = display_df["日期"].dt.strftime("%Y-%m")
-    elif st.session_state.freq == "年":
-        display_df["日期"] = display_df["日期"].dt.strftime("%Y")
+    if not display_df.empty:
+        if st.session_state.freq == "日":
+            display_df["日期"] = display_df["日期"].dt.strftime("%Y-%m-%d")
+        elif st.session_state.freq == "月":
+            display_df["日期"] = display_df["日期"].dt.strftime("%Y-%m")
+        elif st.session_state.freq == "年":
+            display_df["日期"] = display_df["日期"].dt.strftime("%Y")
 
     # 下载按钮放在表格标题下方
     output = io.BytesIO()
-    # 导出为 Excel（注意：使用 xlsxwriter 引擎）
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        # 导出原始（非格式化日期）表用于下载更精准的数据
         merged_download = merged.sort_values("日期")
         merged_download.to_excel(writer, index=False, sheet_name="原油价格")
     st.download_button(
@@ -322,9 +336,9 @@ if "布伦特原油" in dfs and "WTI原油" in dfs and not dfs["布伦特原油"
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    # 翻页表格（每页 15 行）
-    # 注意：show_df_centered 期望 display_df 的 '日期' 是可直接显示的（已格式化为字符串）
-    show_df_centered(display_df, page_size=15)
+    # 翻页表格（使用水平滑块和上一/下一按钮）
+    # 使用唯一 slider key 以避免与其他地方冲突
+    show_df_centered(display_df, page_size=PAGE_SIZE, slider_key="page_slider_main")
 
 else:
     st.warning("未能成功获取历史数据，请检查 API Key 或网络连接。")
