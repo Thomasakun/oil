@@ -1,4 +1,4 @@
-# 文件名: oil_prices_app_mobile_v3.py
+# 文件名: oil_prices_app_mobile_v4.py
 import requests
 import pandas as pd
 import streamlit as st
@@ -81,7 +81,6 @@ def load_or_update_data(series_id, name):
     else:
         df_local = pd.DataFrame(columns=["日期", "价格"])
         last_date = None
-
     df_new = fetch_eia_data_v2(series_id, API_KEY, start=last_date)
     if df_new is not None and not df_new.empty:
         df_all = pd.concat([df_local, df_new]).drop_duplicates(subset="日期").sort_values("日期").reset_index(drop=True)
@@ -106,20 +105,28 @@ def aggregate_data(df, freq):
         df_show = df.copy()
     return df_show
 
+# ========== 分页表格显示函数（不使用 experimental_rerun） ==========
 def show_df_centered(display_df, page, page_size=15):
+    # 保证 page 合法
+    total = len(display_df)
+    max_page = 0 if total == 0 else (total - 1) // page_size
+    page = max(0, min(page, max_page))
     start = page * page_size
-    end = start + page_size
+    end = min(start + page_size, total)
     page_df = display_df.iloc[start:end]
 
-    # 表格美化
+    # 表格美化：使用 to_html（移除索引）
     html = page_df.to_html(index=False)
     st.markdown(
         f"""
         <div style='overflow-x:auto;'>
         <style>
-        table {{font-size:5vw; border-collapse: collapse; width: 100%;}}
+        table {{font-size:4.8vw; border-collapse: collapse; width: 100%;}}
         th, td {{padding: 8px 12px; text-align: center; border: 1px solid #ddd;}}
         th {{background-color:#f2f2f2;}}
+        @media (min-width:600px) {{
+            table {{font-size:14px;}}
+        }}
         </style>
         {html}
         </div>
@@ -127,18 +134,23 @@ def show_df_centered(display_df, page, page_size=15):
         unsafe_allow_html=True
     )
 
-    # 翻页按钮
-    col1, col2, col3 = st.columns([1,2,1])
-    with col1:
-        if st.button("⬅ 上一页", disabled=(page==0)):
-            st.session_state["page"] = max(0, page-1)
-            st.experimental_rerun()
-    with col3:
-        if st.button("下一页 ➡", disabled=(end >= len(display_df))):
-            st.session_state["page"] = page+1
-            st.experimental_rerun()
+    # 翻页回调（不调用 experimental_rerun）
+    def go_prev():
+        st.session_state["page"] = max(0, st.session_state.get("page", 0) - 1)
 
-# ========== Streamlit 页面 ==========
+    def go_next():
+        st.session_state["page"] = min(st.session_state.get("page", 0) + 1, max_page)
+
+    # 三列布局：上一页 | 中间状态 | 下一页
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        st.button("⬅ 上一页", key=f"prev_btn_{page}", disabled=(page == 0), on_click=go_prev, use_container_width=False)
+    with col2:
+        st.markdown(f"**第 {page+1} / {max_page+1} 页**")
+    with col3:
+        st.button("下一页 ➡", key=f"next_btn_{page}", disabled=(page >= max_page), on_click=go_next, use_container_width=False)
+
+# ========== Streamlit 页面主体 ==========
 st.set_page_config(page_title="原油价格：实时期货 & 现货历史", layout="centered")
 st.title("📊 国际原油：期货实时 & 现货历史价格面板")
 
@@ -151,13 +163,13 @@ for name, color in zip(["布伦特原油期货", "WTI原油期货"], ["#FFC107",
     ts = rt.get(name, {}).get("time") or now_ts
     st.markdown(
         f"""
-        <div style='background-color:{color};padding:15px;border-radius:15px;margin-bottom:12px;text-align:center;'>
-        <h2 style='color:white;font-size:5vw;margin:5px 0;'>⛽ {name}</h2>
-        <p style='color:white;font-size:6vw;font-weight:bold;margin:5px 0;'>{('--' if price is None else f'{price:.2f}')} 美元/桶</p>
-        <p style='color:white;font-size:3.5vw;margin:2px 0;'>更新时间 {ts}</p>
-        <p style='color:white;font-size:3vw;opacity:.85;margin:2px 0;'>说明：期货价格为盘中变动，为延迟报价</p>
+        <div style='background-color:{color};padding:12px;border-radius:12px;margin-bottom:10px;text-align:center;'>
+        <h3 style='color:white;font-size:4.8vw;margin:4px 0;'>⛽ {name}</h3>
+        <p style='color:white;font-size:6.5vw;font-weight:bold;margin:4px 0;'>{('--' if price is None else f'{price:.2f}')} 美元/桶</p>
+        <p style='color:white;font-size:3.2vw;margin:2px 0;'>更新时间 {ts}</p>
         </div>
-        """, unsafe_allow_html=True
+        """,
+        unsafe_allow_html=True
     )
 
 st.markdown("---")
@@ -172,26 +184,28 @@ for name, sid in SERIES.items():
     if not df_raw.empty:
         last_row = df_raw.sort_values("日期").iloc[-1]
         spot_latest[name] = {"date": last_row["日期"].strftime("%Y-%m-%d"), "price": float(last_row["价格"])}
-
 for name, color in zip(["布伦特原油", "WTI原油"], ["#FFC107", "#F44336"]):
     d = spot_latest.get(name)
     st.markdown(
         f"""
-        <div style='background-color:{color};padding:15px;border-radius:15px;margin-bottom:12px;text-align:center;'>
-        <h2 style='color:white;font-size:5vw;margin:5px 0;'>🛢 {name}</h2>
-        <p style='color:white;font-size:6vw;font-weight:bold;margin:5px 0;'>{('--' if d is None else f'{d["price"]:.2f}')} 美元/桶</p>
-        <p style='color:white;font-size:3.5vw;margin:2px 0;'>结算日期 {('--' if d is None else d["date"])}</p>
-        <p style='color:white;font-size:3vw;opacity:.85;margin:2px 0;'>EIA 日度统计价，反映交易日结算价（非盘中）</p>
+        <div style='background-color:{color};padding:12px;border-radius:12px;margin-bottom:10px;text-align:center;'>
+        <h3 style='color:white;font-size:4.8vw;margin:4px 0;'>🛢 {name}</h3>
+        <p style='color:white;font-size:6.5vw;font-weight:bold;margin:4px 0;'>{('--' if d is None else f'{d["price"]:.2f}')} 美元/桶</p>
+        <p style='color:white;font-size:3.2vw;margin:2px 0;'>结算日期 {('--' if d is None else d["date"])}</p>
         </div>
-        """, unsafe_allow_html=True
+        """,
+        unsafe_allow_html=True
     )
 
 st.markdown("---")
 
 # —— 历史价格图表 + 表格 ——
 st.subheader("📈 历史原油价格走势（EIA 数据）")
-years = st.select_slider("选择展示的年份范围", options=list(range(2000, 2026)), value=(2015, 2025))
 
+# 年份范围选择
+years = st.select_slider("选择展示的年份范围", options=list(range(2000, datetime.now().year + 1)), value=(2015, datetime.now().year))
+
+# 载入并过滤数据
 dfs = {}
 for name, df_raw in raw_dfs.items():
     if not df_raw.empty:
@@ -199,56 +213,86 @@ for name, df_raw in raw_dfs.items():
         dfs[name] = df
 
 if "布伦特原油" in dfs and "WTI原油" in dfs and not dfs["布伦特原油"].empty and not dfs["WTI原油"].empty:
-    # 初始频率
+    # 初始化 session state
     if "freq" not in st.session_state:
         st.session_state["freq"] = "日"
+    if "page" not in st.session_state:
+        st.session_state["page"] = 0
 
-    # —— 改成按钮组选择频率 ——
-    st.subheader("📋 国际原油历史价格表")
-    freq_col = st.columns(3)
-    if freq_col[0].button("日度", use_container_width=True):
-        st.session_state["freq"] = "日"
-    if freq_col[1].button("月度", use_container_width=True):
-        st.session_state["freq"] = "月"
-    if freq_col[2].button("年度", use_container_width=True):
-        st.session_state["freq"] = "年"
-    freq = st.session_state["freq"]
+    # 先生成折线图 — 保证图紧跟标题
+    # 使用“日/月/年”聚合来生成图，图的 x 轴使用 datetime 类型以获得良好显示
+    freq_for_chart = st.session_state["freq"]
+    dfs_agg = {k: aggregate_data(v, freq_for_chart) for k, v in dfs.items()}
 
-    # 聚合数据
-    dfs = {k: aggregate_data(v, freq) for k, v in dfs.items()}
-
-    merged = dfs["布伦特原油"].merge(
-        dfs["WTI原油"], on="日期", how="outer", suffixes=("_布伦特", "_WTI")
+    # 把日期列解析为 datetime（聚合后得到的格式：日->YYYY-MM-DD, 月->YYYY-MM, 年->YYYY）
+    merged = dfs_agg["布伦特原油"].merge(
+        dfs_agg["WTI原油"],
+        on="日期",
+        how="outer",
+        suffixes=("_布伦特", "_WTI")
     ).sort_values("日期").rename(columns={"价格_布伦特": "布伦特价格", "价格_WTI": "WTI价格"})
 
-    # 折线图
+    # 尝试将 '日期' 转为 datetime，兼容 YYYY, YYYY-MM, YYYY-MM-DD
+    merged["日期"] = pd.to_datetime(merged["日期"], errors="coerce", format=None)
+
+    # 绘图
     fig = px.line(
-        merged, x="日期", y=["布伦特价格", "WTI价格"],
+        merged,
+        x="日期",
+        y=["布伦特价格", "WTI价格"],
         labels={"value": "价格 (美元/桶)", "日期": "日期"},
         title="布伦特 vs WTI 历史价格趋势"
     )
     fig.update_layout(
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=10, r=10, t=40, b=10)
+        margin=dict(l=10, r=10, t=40, b=10),
+        autosize=True
     )
     st.plotly_chart(fig, use_container_width=True, config={'responsive': True})
 
-    # 下载按钮
-    display_df = merged[["日期", "布伦特价格", "WTI价格"]].sort_values("日期", ascending=False).reset_index(drop=True)
+    # —— 表格标题、频率选择与下载放在图下方 ——
+    st.subheader("📋 国际原油历史价格表")
+
+    # 下载按钮（导出当前 freq 的 display 数据）
+    # 先准备 display_df：把日期格式化为字符串，表格按日期降序显示
+    if freq_for_chart == "日":
+        date_fmt = "%Y-%m-%d"
+    elif freq_for_chart == "月":
+        date_fmt = "%Y-%m"
+    else:
+        date_fmt = "%Y"
+
+    display_df = merged.copy()
+    # 有些行日期解析可能为 NaT，先填充为空字符串以防导出报错
+    display_df["日期"] = display_df["日期"].dt.strftime(date_fmt)
+    display_df = display_df[["日期", "布伦特价格", "WTI价格"]].sort_values("日期", ascending=False).reset_index(drop=True)
+
+    # 下载按钮（放在表名下方）
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         display_df.to_excel(writer, index=False, sheet_name="原油价格")
     st.download_button(
         label="💾 下载数据为 Excel",
         data=output.getvalue(),
-        file_name="原油价格.xlsx",
+        file_name=f"原油价格_{freq_for_chart}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    # 分页表格
-    if "page" not in st.session_state:
-        st.session_state["page"] = 0
-    show_df_centered(display_df, st.session_state["page"], page_size=15)
+    # —— 频率按钮组（标题下方） ——
+    c1, c2, c3 = st.columns(3)
+    def set_freq_day(): st.session_state.update({"freq": "日", "page": 0})
+    def set_freq_month(): st.session_state.update({"freq": "月", "page": 0})
+    def set_freq_year(): st.session_state.update({"freq": "年", "page": 0})
+
+    with c1:
+        st.button("日度", key="freq_day", on_click=set_freq_day, use_container_width=True)
+    with c2:
+        st.button("月度", key="freq_month", on_click=set_freq_month, use_container_width=True)
+    with c3:
+        st.button("年度", key="freq_year", on_click=set_freq_year, use_container_width=True)
+
+    # —— 分页表格显示（第一页为 session_state["page"]） ——
+    show_df_centered(display_df, st.session_state.get("page", 0), page_size=15)
 
 else:
     st.warning("未能成功获取历史数据，请检查 API Key 或网络连接。")
