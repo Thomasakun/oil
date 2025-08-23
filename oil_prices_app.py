@@ -106,15 +106,12 @@ def aggregate_data(df, freq):
         df_show = df.copy()
     return df_show
 
-def show_df_paged(display_df, rows_per_page=20):
-    total_rows = len(display_df)
-    total_pages = (total_rows - 1) // rows_per_page + 1
-    page = st.number_input("页码选择", min_value=1, max_value=total_pages, value=1, step=1)
-    start_idx = (page - 1) * rows_per_page
-    end_idx = start_idx + rows_per_page
-    page_df = display_df.iloc[start_idx:end_idx]
+def show_df_centered(display_df, page, page_size=15):
+    start = page * page_size
+    end = start + page_size
+    page_df = display_df.iloc[start:end]
 
-    # 表格美化 + 大字体
+    # 表格美化
     html = page_df.to_html(index=False)
     st.markdown(
         f"""
@@ -129,8 +126,17 @@ def show_df_paged(display_df, rows_per_page=20):
         """,
         unsafe_allow_html=True
     )
-    st.write(f"第 {page} / {total_pages} 页")
 
+    # 翻页按钮
+    col1, col2, col3 = st.columns([1,2,1])
+    with col1:
+        if st.button("⬅ 上一页", disabled=(page==0)):
+            st.session_state["page"] = max(0, page-1)
+            st.experimental_rerun()
+    with col3:
+        if st.button("下一页 ➡", disabled=(end >= len(display_df))):
+            st.session_state["page"] = page+1
+            st.experimental_rerun()
 
 # ========== Streamlit 页面 ==========
 st.set_page_config(page_title="原油价格：实时期货 & 现货历史", layout="centered")
@@ -151,8 +157,7 @@ for name, color in zip(["布伦特原油期货", "WTI原油期货"], ["#FFC107",
         <p style='color:white;font-size:3.5vw;margin:2px 0;'>更新时间 {ts}</p>
         <p style='color:white;font-size:3vw;opacity:.85;margin:2px 0;'>说明：期货价格为盘中变动，为延迟报价</p>
         </div>
-        """,
-        unsafe_allow_html=True
+        """, unsafe_allow_html=True
     )
 
 st.markdown("---")
@@ -178,8 +183,7 @@ for name, color in zip(["布伦特原油", "WTI原油"], ["#FFC107", "#F44336"])
         <p style='color:white;font-size:3.5vw;margin:2px 0;'>结算日期 {('--' if d is None else d["date"])}</p>
         <p style='color:white;font-size:3vw;opacity:.85;margin:2px 0;'>EIA 日度统计价，反映交易日结算价（非盘中）</p>
         </div>
-        """,
-        unsafe_allow_html=True
+        """, unsafe_allow_html=True
     )
 
 st.markdown("---")
@@ -195,14 +199,29 @@ for name, df_raw in raw_dfs.items():
         dfs[name] = df
 
 if "布伦特原油" in dfs and "WTI原油" in dfs and not dfs["布伦特原油"].empty and not dfs["WTI原油"].empty:
+    # 初始频率
+    if "freq" not in st.session_state:
+        st.session_state["freq"] = "日"
+
+    # —— 改成按钮组选择频率 ——
+    st.subheader("📋 国际原油历史价格表")
+    freq_col = st.columns(3)
+    if freq_col[0].button("日度", use_container_width=True):
+        st.session_state["freq"] = "日"
+    if freq_col[1].button("月度", use_container_width=True):
+        st.session_state["freq"] = "月"
+    if freq_col[2].button("年度", use_container_width=True):
+        st.session_state["freq"] = "年"
+    freq = st.session_state["freq"]
+
+    # 聚合数据
+    dfs = {k: aggregate_data(v, freq) for k, v in dfs.items()}
+
     merged = dfs["布伦特原油"].merge(
         dfs["WTI原油"], on="日期", how="outer", suffixes=("_布伦特", "_WTI")
     ).sort_values("日期").rename(columns={"价格_布伦特": "布伦特价格", "价格_WTI": "WTI价格"})
 
     # 折线图
-    freq_choice = st.radio("选择数据展示频率", ["日", "月", "年"], horizontal=True)
-    merged = aggregate_data(merged, freq_choice)
-
     fig = px.line(
         merged, x="日期", y=["布伦特价格", "WTI价格"],
         labels={"value": "价格 (美元/桶)", "日期": "日期"},
@@ -214,11 +233,8 @@ if "布伦特原油" in dfs and "WTI原油" in dfs and not dfs["布伦特原油"
     )
     st.plotly_chart(fig, use_container_width=True, config={'responsive': True})
 
-    # 表格
-    st.subheader("📋 国际原油历史价格表")
-    display_df = merged[["日期", "布伦特价格", "WTI价格"]].sort_values("日期", ascending=False).reset_index(drop=True)
-
     # 下载按钮
+    display_df = merged[["日期", "布伦特价格", "WTI价格"]].sort_values("日期", ascending=False).reset_index(drop=True)
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         display_df.to_excel(writer, index=False, sheet_name="原油价格")
@@ -230,7 +246,9 @@ if "布伦特原油" in dfs and "WTI原油" in dfs and not dfs["布伦特原油"
     )
 
     # 分页表格
-    show_df_paged(display_df, rows_per_page=20)
+    if "page" not in st.session_state:
+        st.session_state["page"] = 0
+    show_df_centered(display_df, st.session_state["page"], page_size=15)
 
 else:
     st.warning("未能成功获取历史数据，请检查 API Key 或网络连接。")
